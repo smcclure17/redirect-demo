@@ -9,5 +9,14 @@
     "predeploy": [
       "npm --prefix \"$RESOURCE_DIR\" run build"
     ]
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/**", "function": "url"
+    },
+    {
+      "source": "**",
+      "destination": "/index.html"
+    }
+  ]
 }

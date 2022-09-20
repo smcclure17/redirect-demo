@@ -1,37 +1,53 @@
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
-admin.initializeApp()
+admin.initializeApp();
 
-// Generates a short url slug (in reality it's just a string at the moment) 
-// and appends it to the document whenever a new document is added to the urls collection. 
-exports.shortenUrl = functions.firestore
-  .document('/urls/{linkID}')
+/**
+ * Generates a unique shortened url slug for a url document whenever one is created.
+ *
+ * This slug is appended to the document as the field "shortUrl".
+ */
+exports.createShortUrl = functions.firestore
+  .document("/urls/{documentId}")
   .onCreate(async (snap) => {
-    const recordData = snap.data()
+    const recordData = snap.data();
     const random = (Math.random() + 1).toString(36).substring(2);
 
     return snap.ref.set({
       ...recordData,
-      short: random,
+      shortUrl: random,
     });
   });
 
-// Redirects request to Canonical URL that's mapped to the short URL (string).
-// e.g https://us-central1-test-url-api.cloudfunctions.net/bigben?url=SHORT_URL_HERE
-exports.bigben = functions.https.onRequest((req, res) => {
-  const shortUrl = req.query.url as string;
+/**
+ * Redirects short url to original url.
+ *
+ * Expected url structure:
+ * https://us-central1-test-url-api.cloudfunctions.net/url/SHORT_URL_HERE
+ */
+exports.url = functions.https.onRequest((req, res) => {
+  // Feels very hacky: Split URL to get the short URL (assumed to be passed at
+  //the end of the url). See https://stackoverflow.com/q/50156802/14034347
+  const shortComponents = req.url.split("/");
+  const shortUrl = shortComponents[shortComponents.length - 1];
   if (!shortUrl) {
-    res.status(400).send('Missing URL parameter');
+    res
+      .status(400)
+      .send(
+        "Missing URL parameter." +
+          "\n Expected structure: https://....net/url/SHORT_URL_HERE"
+      );
     return;
   }
 
-  getUrl(shortUrl).then((data) => {
-    const canonicalUrl = data.url as string
-    const image = data.imageUrl as string
-    res.status(200).send(
-      `<!doctype html>
+  getUrlData(shortUrl)
+    .then((data) => {
+      const canonicalUrl = data.url as string;
+      const image = data.imageUrl as string;
+      res.status(200).send(
+        `<!doctype html>
         <head>
-        <title>Time</title>
+        <title>Redirecting...</title>
         <meta http-equiv="Refresh" content="0; url='${canonicalUrl}'" />
         <meta property="og:url" content url='${canonicalUrl}'/>
         <meta property="og:description" content='This is a description'/>
@@ -39,18 +55,29 @@ exports.bigben = functions.https.onRequest((req, res) => {
         <meta property="og:image" content="${image}" />
         </head>
       </html>`
-    );
-  }).catch((err) => {
-    {
-      res.status(500).send(err);
-    }
-  })
+      );
+    })
+    .catch((err) => {
+      {
+        res.status(500).send(`Internal Error: /n ${JSON.stringify(err)}`);
+      }
+    });
 });
 
-// Fetch Url from Firestore that have matching short URL key value.
-async function getUrl(shortUrl: string) {
+/**
+ * Fetch corresponding data for a given shortened url from Firestore.
+ *
+ * @param shortUrl Shortened url for which to fetch data.
+ * @returns Promise containing the data for the given short url.
+ */
+async function getUrlData(shortUrl: string) {
   const db = admin.firestore();
-  const querySnapshot = await db.collection("urls").where("short", "==", shortUrl).get();
+  const querySnapshot = await db
+    .collection("urls")
+    .where("shortUrl", "==", shortUrl)
+    .get();
   // assume exactly one entry
-  return querySnapshot.docs[0].data()
+  const data = querySnapshot.docs[0].data();
+  console.log("matching data: ", JSON.stringify(data));
+  return data;
 }
