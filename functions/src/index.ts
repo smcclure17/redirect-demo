@@ -1,23 +1,31 @@
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 import { UrlData } from "./types";
+import {takeScreenshot} from './screenshot';
 
 admin.initializeApp();
+
+const STORAGE_BUCKET_NAME = "test-url-api-images"
 
 /**
  * Register a new shortened url.
  *
  * Requires `content-type: application/json` header and a JSON body (document the args here).
  */
-exports.registerUrl = functions.https.onRequest((req, res) => {
+exports.registerUrl = functions.https.onRequest(async (req, res)=> {
   const imageUrl = req.body.imageUrl as string;
   const imageScreenshotUrl = req.body.imageScreenshotUrl as string;
   if (!(imageUrl || imageScreenshotUrl)) {
     res.status(400).send("Missing imageUrl or imageScreenshotUrl parameter.");
     return;
   }
+
+  let imageScreenshot: string | void;
+  if (imageScreenshotUrl) {
+    imageScreenshot = await takeAndUploadScreenshot(imageScreenshotUrl);
+  }
   const data: UrlData = {
-    imageUrl: imageUrl ?? "",
+    imageUrl: imageScreenshot ?? imageUrl,
     imageScreenshotUrl: imageScreenshotUrl ?? "",
     url: req.body.url ?? "",
     title: req.body.title ?? "",
@@ -101,4 +109,13 @@ async function getUrlDocumentDataById(documentId: string) {
   const db = admin.firestore();
   const querySnapshot = await db.collection("urls").doc(documentId).get();
   return querySnapshot.data() as UrlData;
+}
+
+async function takeAndUploadScreenshot(url: string) {
+  const screenshot = await takeScreenshot(url);
+  const bucket = admin.storage().bucket(STORAGE_BUCKET_NAME);
+  const postUrl = bucket.upload(screenshot).then((response) => {
+    return "https://i.imgur.com/51bGuB5.jpeg"
+  }).catch(() => {"error"});
+  return postUrl
 }
