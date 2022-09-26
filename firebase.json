@@ -8,11 +8,13 @@
     ],
     "predeploy": [
       "npm --prefix \"$RESOURCE_DIR\" run build"
-    ]
+    ],
+    "source": "functions"
   },
   "rewrites": [
     {
-      "source": "/**", "function": "url"
+      "source": "/**",
+      "function": "url"
     },
     {
       "source": "**",

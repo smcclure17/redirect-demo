@@ -2,6 +2,7 @@ import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 import { UrlData } from "./types";
 import { takeScreenshot } from "./screenshot";
+import * as crypto from "crypto"
 
 admin.initializeApp();
 
@@ -26,7 +27,8 @@ exports.registerUrl = functions
       return;
     }
 
-    const documentId = (Math.random() + 1).toString(36).substring(2);
+    const urlCollection = admin.firestore().collection("urls");
+    const documentId = await createUniqueId(urlCollection);
     let imageScreenshot: string | void;
     if (imageScreenshotUrl) {
       imageScreenshot = await takeAndUploadScreenshot(
@@ -34,6 +36,8 @@ exports.registerUrl = functions
         documentId
       );
     }
+
+    // TODO: Better way to handle missing data than coercing to empty strings?
     const data: UrlData = {
       imageUrl: imageScreenshot ?? imageUrl ?? "",
       imageScreenshotUrl: imageScreenshotUrl ?? "",
@@ -43,7 +47,6 @@ exports.registerUrl = functions
     };
 
     const baseUrl = "https://us-central1-test-url-api.cloudfunctions.net/url/";
-    const urlCollection = admin.firestore().collection("urls");
     urlCollection
       .where("url", "==", data.url)
       .get()
@@ -66,7 +69,7 @@ exports.registerUrl = functions
           if (!doc.exists) {
             res
               .status(500)
-              .send(`error: Document with id ${doc.id} doesn't exist`);
+              .send(`error: Document with id ${doc.id} is expected but doesn't exist.`);
           }
           doc.ref.update(data).then(() => {
             res.status(200).send(`${baseUrl}${doc.id}`);
@@ -114,7 +117,6 @@ exports.url = functions.https.onRequest((req, res) => {
       res.status(200).send(
         `<!doctype html>
           <head>
-            <title>Redirecting...</title>
             <meta http-equiv="Refresh" content="0; url='${fullUrl}'" />
             <meta property="og:image" content="${image}" />
             <meta property="og:url" content url='${fullUrl}'/>
@@ -164,4 +166,16 @@ async function takeAndUploadScreenshot(url: string, filename: string) {
     .catch(() => {
       console.log("Error uploading screenshot to storage.");
     });
+}
+
+async function createUniqueId(collection: admin.firestore.CollectionReference): Promise<string> {
+  const urlHash = crypto.randomBytes(5).toString("hex");
+  const documentWithHash = await collection.doc(urlHash).get()
+  if (documentWithHash.exists) {
+    console.log("Hash collision. Generating new hash.")
+    return createUniqueId(collection)
+  } else {
+     console.log(`Hash generated: ${urlHash}`)
+    return urlHash
+  }
 }
