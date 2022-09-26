@@ -1,6 +1,6 @@
-import * as path from 'path';
-import * as os from 'os';
-import * as puppeteer from "puppeteer-core";
+import * as path from "path";
+import * as os from "os";
+import * as puppeteer from "puppeteer";
 
 const BROWSER_WIDTH = 2800;
 const BROWSER_HEIGHT = 1575;
@@ -13,7 +13,7 @@ const TIMEOUT = 15 * 1000;
 let browserPromise: Promise<puppeteer.Browser> | null = null;
 async function getBrowser(): Promise<puppeteer.Browser> {
   if (!browserPromise) {
-    console.log('Launching browser...');
+    console.log("Launching browser...");
     browserPromise = puppeteer
       .launch({
         defaultViewport: {
@@ -22,18 +22,21 @@ async function getBrowser(): Promise<puppeteer.Browser> {
         },
         headless: true,
       })
-      .then(browser => {
-        console.log('Browser started.');
+      .then((browser) => {
+        console.log("Browser started.");
         return browser;
       });
   }
   return browserPromise;
 }
 
-export async function takeScreenshot(url: string): Promise<string> {
+export async function takeScreenshot(
+  url: string,
+  filename: string
+): Promise<string> {
   const browser = await getBrowser();
 
-  console.log('Opening tab.');
+  console.log("Opening tab.");
   const tab = await browser.newPage();
 
   console.log(`Going to URL, ${url}`);
@@ -43,21 +46,21 @@ export async function takeScreenshot(url: string): Promise<string> {
   // the screenshot and screenshot-ready divs, meaning this will timeout everytime.
   // Should we just use a flat timeout? Is there an elegant way to check if content has loaded?
   console.log('Waiting for "screenshot" div.');
-  const element = await tab.waitForSelector('.screenshot', {
+  const element = await tab.waitForSelector(".screenshot", {
     timeout: TIMEOUT,
   });
 
   console.log('Waiting for "screenshot-ready" div.');
-  await tab.waitForSelector('.screenshot-ready', {
+  await tab.waitForSelector(".screenshot-ready", {
     timeout: TIMEOUT,
   });
 
-  console.log('Capturing screenshot.');
-  const file = path.join(os.tmpdir(), 'temp.png');
+  console.log("Capturing screenshot.");
+  const file = path.join(os.tmpdir(), `${filename}.png`);
   await element?.screenshot({
     path: file,
   });
-  console.log('Screenshot done.');
+  console.log("Screenshot done.");
 
   await tab.close();
   return file;
