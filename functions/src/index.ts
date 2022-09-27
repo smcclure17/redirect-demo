@@ -9,7 +9,7 @@ import * as cors from "cors";
 admin.initializeApp();
 const app = express();
 app.use(cors({ origin: true }));
-const STORAGE_BUCKET_NAME = "test-url-api-images";
+const storageBucket = "test-url-api-images";
 const runtimeOpts = {
   timeoutSeconds: 300,
   memory: "512MB" as "512MB", // idk why this casting is necessary???
@@ -48,7 +48,7 @@ app.post("/registerUrl", async (req, res) => {
     description: req.body.description ?? "",
   };
 
-  const baseUrl = "https://us-central1-test-url-api.cloudfunctions.net/url/";
+  const baseUrl = "https://us-central1-test-url-api.cloudfunctions.net/api/";
   urlCollection
     .where("url", "==", data.url)
     .get()
@@ -97,12 +97,10 @@ app.post("/registerUrl", async (req, res) => {
 app.get("/:url", (req, res) => {
   const shortUrl = req.params.url;
   if (!shortUrl || shortUrl.length === 0) {
-    res
-      .status(400)
-      .send(
-        "Missing URL parameter." +
-          "\n Expected structure: https://....net/url/SHORT_URL_HERE"
-      );
+    const errorMsg =
+      "Missing URL parameter. " +
+      "Expected structure: https://<...>.net/api/SHORT_URL_HERE";
+    res.status(400).send(errorMsg);
     return;
   }
 
@@ -158,7 +156,7 @@ async function getUrlDocumentDataById(documentId: string) {
  */
 async function takeAndUploadScreenshot(url: string, filename: string) {
   const screenshot = await takeScreenshot(url, filename);
-  const bucket = admin.storage().bucket(STORAGE_BUCKET_NAME);
+  const bucket = admin.storage().bucket(storageBucket);
   return bucket
     .upload(screenshot, { predefinedAcl: "publicRead" })
     .then(() => {
