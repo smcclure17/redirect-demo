@@ -2,99 +2,101 @@ import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 import { UrlData } from "./types";
 import { takeScreenshot } from "./screenshot";
-import * as crypto from "crypto"
+import * as crypto from "crypto";
+import * as express from "express";
+import * as cors from "cors";
 
 admin.initializeApp();
-
+const app = express();
+app.use(cors({ origin: true }));
 const STORAGE_BUCKET_NAME = "test-url-api-images";
 const runtimeOpts = {
   timeoutSeconds: 300,
   memory: "512MB" as "512MB", // idk why this casting is necessary???
 };
+exports.api = functions.runWith(runtimeOpts).https.onRequest(app);
 
 /**
  * Register a new shortened url.
  *
  * Requires `content-type: application/json` header and a JSON body (document the args here).
  */
-exports.registerUrl = functions
-  .runWith(runtimeOpts)
-  .https.onRequest(async (req, res) => {
-    const imageUrl = req.body.imageUrl as string;
-    const imageScreenshotUrl = req.body.imageScreenshotUrl as string;
-    if (!(imageUrl || imageScreenshotUrl)) {
-      res.status(400).send("Missing imageUrl or imageScreenshotUrl parameter.");
-      return;
-    }
+app.post("/registerUrl", async (req, res) => {
+  const imageUrl = req.body.imageUrl as string;
+  const imageScreenshotUrl = req.body.imageScreenshotUrl as string;
+  if (!(imageUrl || imageScreenshotUrl)) {
+    res.status(400).send("Missing imageUrl or imageScreenshotUrl parameter.");
+    return;
+  }
 
-    const urlCollection = admin.firestore().collection("urls");
-    const documentId = await createUniqueId(urlCollection);
-    let imageScreenshot: string | void;
-    if (imageScreenshotUrl) {
-      imageScreenshot = await takeAndUploadScreenshot(
-        imageScreenshotUrl,
-        documentId
-      );
-    }
+  const urlCollection = admin.firestore().collection("urls");
+  const documentId = await createUniqueId(urlCollection);
+  let imageScreenshot: string | void;
+  if (imageScreenshotUrl) {
+    imageScreenshot = await takeAndUploadScreenshot(
+      imageScreenshotUrl,
+      documentId
+    );
+  }
 
-    // TODO: Better way to handle missing data than coercing to empty strings?
-    const data: UrlData = {
-      imageUrl: imageScreenshot ?? imageUrl ?? "",
-      imageScreenshotUrl: imageScreenshotUrl ?? "",
-      url: req.body.url ?? "",
-      title: req.body.title ?? "",
-      description: req.body.description ?? "",
-    };
+  // TODO: Better way to handle missing data than coercing to empty strings?
+  const data: UrlData = {
+    imageUrl: imageScreenshot ?? imageUrl ?? "",
+    imageScreenshotUrl: imageScreenshotUrl ?? "",
+    url: req.body.url ?? "",
+    title: req.body.title ?? "",
+    description: req.body.description ?? "",
+  };
 
-    const baseUrl = "https://us-central1-test-url-api.cloudfunctions.net/url/";
-    urlCollection
-      .where("url", "==", data.url)
-      .get()
-      .then((querySnapshot) => {
-        // Create a new document if the URL doesn't already have an entry.
-        if (querySnapshot.size === 0) {
-          urlCollection
-            .doc(documentId)
-            .set(data)
-            .then(() => {
-              res.status(200).send(`${baseUrl}${documentId}`);
-            })
-            .catch((err) => {
-              res.status(500).send(`error ${JSON.stringify(err)}`);
-            });
-        }
-        // Update the existing document if the URL already has an entry.
-        else if (querySnapshot.size === 1) {
-          const doc = querySnapshot.docs[0];
-          if (!doc.exists) {
-            res
-              .status(500)
-              .send(`error: Document with id ${doc.id} is expected but doesn't exist.`);
-          }
-          doc.ref.update(data).then(() => {
-            res.status(200).send(`${baseUrl}${doc.id}`);
+  const baseUrl = "https://us-central1-test-url-api.cloudfunctions.net/url/";
+  urlCollection
+    .where("url", "==", data.url)
+    .get()
+    .then((querySnapshot) => {
+      // Create a new document if the URL doesn't already have an entry.
+      if (querySnapshot.size === 0) {
+        urlCollection
+          .doc(documentId)
+          .set(data)
+          .then(() => {
+            res.status(200).send(`${baseUrl}${documentId}`);
+          })
+          .catch((err) => {
+            res.status(500).send(`error ${JSON.stringify(err)}`);
           });
-        } else {
+      }
+      // Update the existing document if the URL already has an entry.
+      else if (querySnapshot.size === 1) {
+        const doc = querySnapshot.docs[0];
+        if (!doc.exists) {
           res
             .status(500)
             .send(
-              `error: Unexpected number or documents for URL. Expected 0 or 1, got ${querySnapshot.size}`
+              `error: Document with id ${doc.id} is expected but doesn't exist.`
             );
         }
-      });
-  });
+        doc.ref.update(data).then(() => {
+          res.status(200).send(`${baseUrl}${doc.id}`);
+        });
+      } else {
+        res
+          .status(500)
+          .send(
+            `error: Unexpected number or documents for URL. Expected 0 or 1, got ${querySnapshot.size}`
+          );
+      }
+    });
+});
 
 /**
- * Redirects short url to original url.
+ * Redirects share link url to original url.
  *
  * Expected url structure:
- * https://us-central1-test-url-api.cloudfunctions.net/url/SHORT_URL_HERE
+ * https://us-central1-test-url-api.cloudfunctions.net/api/SHORT_URL_HERE
  */
-exports.url = functions.https.onRequest((req, res) => {
-  // Feels hacky but: We split the URL to get the short URL (assumed to be passed
-  // at the end of the url). See https://stackoverflow.com/q/50156802/14034347
-  const urlComponents = req.url.split("/");
-  if (urlComponents.length < 1) {
+app.get("/:url", (req, res) => {
+  const shortUrl = req.params.url;
+  if (!shortUrl || shortUrl.length === 0) {
     res
       .status(400)
       .send(
@@ -103,7 +105,6 @@ exports.url = functions.https.onRequest((req, res) => {
       );
     return;
   }
-  const shortUrl = urlComponents[urlComponents.length - 1];
 
   getUrlDocumentDataById(shortUrl)
     .then((data) => {
@@ -168,14 +169,16 @@ async function takeAndUploadScreenshot(url: string, filename: string) {
     });
 }
 
-async function createUniqueId(collection: admin.firestore.CollectionReference): Promise<string> {
+async function createUniqueId(
+  collection: admin.firestore.CollectionReference
+): Promise<string> {
   const urlHash = crypto.randomBytes(5).toString("hex");
-  const documentWithHash = await collection.doc(urlHash).get()
+  const documentWithHash = await collection.doc(urlHash).get();
   if (documentWithHash.exists) {
-    console.log("Hash collision. Generating new hash.")
-    return createUniqueId(collection)
+    console.log("Hash collision. Generating new hash.");
+    return createUniqueId(collection);
   } else {
-     console.log(`Hash generated: ${urlHash}`)
-    return urlHash
+    console.log(`Hash generated: ${urlHash}`);
+    return urlHash;
   }
 }

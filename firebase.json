@@ -13,10 +13,6 @@
   },
   "rewrites": [
     {
-      "source": "/**",
-      "function": "url"
-    },
-    {
       "source": "**",
       "destination": "/index.html"
     }
