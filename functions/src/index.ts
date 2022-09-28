@@ -8,6 +8,7 @@ import {
   getUrlDocumentDataById,
   createUniqueId,
 } from "./utils";
+import { takeScreenshot } from "./screenshot";
 
 admin.initializeApp();
 const app = express();
@@ -138,11 +139,13 @@ app.get("/:url", (req, res) => {
  * Takes a screenshot of the given url and returns the url of the screenshot.
  *
  * Expected url structure:
- * https://us-central1-test-url-api.cloudfunctions.net/api/screenshot?url=URL_HERE
+ * https://us-central1-test-url-api.cloudfunctions.net/api/dynamic-image/URL_HERE
  *
  */
-app.post("/screenshot", async (req, res) => {
-  const screenshotUrl = req.query.url as string;
+app.get("/dynamic-image/*", async (req, res) => {
+  // const screenshotUrl = "https://covidactnow.org/internal/share-image/states/ma";
+  const urlSplit = req.url.split("dynamic-image/");
+  const screenshotUrl = urlSplit[urlSplit.length - 1];
   if (!screenshotUrl || screenshotUrl.length === 0) {
     const errorMsg =
       `Missing url query parameter.` +
@@ -152,6 +155,27 @@ app.post("/screenshot", async (req, res) => {
   }
   // TODO: check if entry for photo already exists, and if so override the existing entry?
   const documentId = await createUniqueId(admin.firestore().collection("urls"));
-  const screenshot = await takeAndUploadScreenshot(screenshotUrl, documentId);
-  res.status(200).send(screenshot);
+  takeScreenshot(screenshotUrl, documentId)
+    .then((file: string) => {
+      console.log("screenshot generated.");
+
+      // Normally we let the CDN and the browser cache for 24hrs, but you can
+      // override this with the ?no-cache query param (useful for testing or for
+      // the scheduled ping that tries to keep functions warm).
+      // TODO(michael): Consider moving this to middleware (but how do we avoid caching errors?)
+      if (req.query["no-cache"] === undefined) {
+        console.log("Setting cache-control header.");
+        res.header("cache-control", "public, max-age=86400");
+      }
+
+      res.sendFile(file);
+    })
+    .catch((error) => {
+      console.error("Error", error);
+      res
+        .status(500)
+        .send(
+          `<html>Image temporarily not available. Try again later.<br/>Error<br />${error}</html>`
+        );
+    });
 });
