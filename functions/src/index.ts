@@ -1,15 +1,17 @@
 import * as functions from "firebase-functions";
 import * as admin from "firebase-admin";
 import { UrlData } from "./types";
-import { takeScreenshot } from "./screenshot";
-import * as crypto from "crypto";
 import * as express from "express";
 import * as cors from "cors";
+import {
+  takeAndUploadScreenshot,
+  getUrlDocumentDataById,
+  createUniqueId,
+} from "./utils";
 
 admin.initializeApp();
 const app = express();
 app.use(cors({ origin: true }));
-const storageBucket = "test-url-api-images";
 const runtimeOpts = {
   timeoutSeconds: 300,
   memory: "512MB" as "512MB", // idk why this casting is necessary???
@@ -32,6 +34,8 @@ app.post("/registerUrl", async (req, res) => {
   const urlCollection = admin.firestore().collection("urls");
   const documentId = await createUniqueId(urlCollection);
   let imageScreenshot: string | void;
+  // TODO: re-structure this such that the request can return a URL right away, while generating
+  // a screenshot in the background, instead of waiting for the screenshot to be generated.
   if (imageScreenshotUrl) {
     imageScreenshot = await takeAndUploadScreenshot(
       imageScreenshotUrl,
@@ -131,52 +135,23 @@ app.get("/:url", (req, res) => {
 });
 
 /**
- * Fetch corresponding data for a given shortened url from Firestore.
+ * Takes a screenshot of the given url and returns the url of the screenshot.
  *
- * Firestore urls collection is structured as records indexed by the shortened url.
+ * Expected url structure:
+ * https://us-central1-test-url-api.cloudfunctions.net/api/screenshot?url=URL_HERE
  *
- * @param documentId Shortened url for which to fetch data.
- * @returns Promise containing the data for the given short url.
  */
-async function getUrlDocumentDataById(documentId: string) {
-  const db = admin.firestore();
-  const querySnapshot = await db.collection("urls").doc(documentId).get();
-  if (!querySnapshot.exists) {
-    throw new Error(`Document with id ${documentId} doesn't exist`);
+app.post("/screenshot", async (req, res) => {
+  const screenshotUrl = req.query.url as string;
+  if (!screenshotUrl || screenshotUrl.length === 0) {
+    const errorMsg =
+      `Missing url query parameter.` +
+      `Expected structure: https://<...>.net/api/screenshot?url=URL_HERE`;
+    res.status(400).send(errorMsg);
+    return;
   }
-  return querySnapshot.data() as UrlData;
-}
-
-/**
- * Take screenshot of given url, upload screenshot to storage, and return the url.
- *
- * @param url url to screenshot
- * @param filename name of file to store in storage
- * @returns url of screenshot in storage
- */
-async function takeAndUploadScreenshot(url: string, filename: string) {
-  const screenshot = await takeScreenshot(url, filename);
-  const bucket = admin.storage().bucket(storageBucket);
-  return bucket
-    .upload(screenshot, { predefinedAcl: "publicRead" })
-    .then(() => {
-      return `https://storage.googleapis.com/test-url-api-images/${filename}.png`;
-    })
-    .catch(() => {
-      console.log("Error uploading screenshot to storage.");
-    });
-}
-
-async function createUniqueId(
-  collection: admin.firestore.CollectionReference
-): Promise<string> {
-  const urlHash = crypto.randomBytes(5).toString("hex");
-  const documentWithHash = await collection.doc(urlHash).get();
-  if (documentWithHash.exists) {
-    console.log("Hash collision. Generating new hash.");
-    return createUniqueId(collection);
-  } else {
-    console.log(`Hash generated: ${urlHash}`);
-    return urlHash;
-  }
-}
+  // TODO: check if entry for photo already exists, and if so override the existing entry?
+  const documentId = await createUniqueId(admin.firestore().collection("urls"));
+  const screenshot = await takeAndUploadScreenshot(screenshotUrl, documentId);
+  res.status(200).send(screenshot);
+});
