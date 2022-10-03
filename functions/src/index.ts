@@ -3,19 +3,16 @@ import * as admin from "firebase-admin";
 import { UrlData } from "./types";
 import * as express from "express";
 import * as cors from "cors";
-import {
-  takeAndUploadScreenshot,
-  getUrlDocumentDataById,
-  createUniqueId,
-} from "./utils";
+import { getUrlDocumentDataById, createUniqueId } from "./utils";
 import { takeScreenshot } from "./screenshot";
+import { assert } from "@actnowcoalition/assert";
 
 admin.initializeApp();
 const app = express();
 app.use(cors({ origin: true }));
 const runtimeOpts = {
-  timeoutSeconds: 300,
-  memory: "512MB" as "512MB", // idk why this casting is necessary???
+  timeoutSeconds: 90,
+  memory: "1GB" as "1GB", // idk why this casting is necessary???
 };
 exports.api = functions.runWith(runtimeOpts).https.onRequest(app);
 
@@ -26,28 +23,13 @@ exports.api = functions.runWith(runtimeOpts).https.onRequest(app);
  */
 app.post("/registerUrl", async (req, res) => {
   const imageUrl = req.body.imageUrl as string;
-  const imageScreenshotUrl = req.body.imageScreenshotUrl as string;
-  if (!(imageUrl || imageScreenshotUrl)) {
-    res.status(400).send("Missing imageUrl or imageScreenshotUrl parameter.");
-    return;
-  }
 
   const urlCollection = admin.firestore().collection("urls");
   const documentId = await createUniqueId(urlCollection);
-  let imageScreenshot: string | void;
-  // TODO: re-structure this such that the request can return a URL right away, while generating
-  // a screenshot in the background, instead of waiting for the screenshot to be generated.
-  if (imageScreenshotUrl) {
-    imageScreenshot = await takeAndUploadScreenshot(
-      imageScreenshotUrl,
-      documentId
-    );
-  }
 
   // TODO: Better way to handle missing data than coercing to empty strings?
   const data: UrlData = {
-    imageUrl: imageScreenshot ?? imageUrl ?? "",
-    imageScreenshotUrl: imageScreenshotUrl ?? "",
+    imageUrl: imageUrl ?? "",
     url: req.body.url ?? "",
     title: req.body.title ?? "",
     description: req.body.description ?? "",
@@ -143,7 +125,6 @@ app.get("/:url", (req, res) => {
  *
  */
 app.get("/dynamic-image/*", async (req, res) => {
-  // const screenshotUrl = "https://covidactnow.org/internal/share-image/states/ma";
   const urlSplit = req.url.split("dynamic-image/");
   const screenshotUrl = urlSplit[urlSplit.length - 1];
   if (!screenshotUrl || screenshotUrl.length === 0) {
@@ -154,11 +135,9 @@ app.get("/dynamic-image/*", async (req, res) => {
     return;
   }
   // TODO: check if entry for photo already exists, and if so override the existing entry?
-  const documentId = await createUniqueId(admin.firestore().collection("urls"));
-  takeScreenshot(screenshotUrl, documentId)
+  takeScreenshot(screenshotUrl, "temp")
     .then((file: string) => {
       console.log("screenshot generated.");
-
       // Normally we let the CDN and the browser cache for 24hrs, but you can
       // override this with the ?no-cache query param (useful for testing or for
       // the scheduled ping that tries to keep functions warm).
@@ -179,3 +158,54 @@ app.get("/dynamic-image/*", async (req, res) => {
         );
     });
 });
+
+/**
+ * Retrieves the share link for a given url, if it exists.
+ *
+ * Expected url structure:
+ * https://us-central1-test-url-api.cloudfunctions.net/api/getShareLinkUrl/URL_HERE
+ *
+ * Returns the share link url if it exists, otherwise returns a 404.
+ */
+app.get("/getShareLinkUrl/:url", (req, res) => {
+  const db = admin.firestore();
+  db.collection("urls")
+    .where("url", "==", req.params.url)
+    .get()
+    .then((querySnapshot) => {
+      assert(
+        querySnapshot.size <= 1,
+        "Expected 0 or 1 documents for URL, got " + querySnapshot.size
+      );
+      if (querySnapshot.size === 0) {
+        res.status(404).send("No share link exists for this URL.");
+      } else {
+        const doc = querySnapshot.docs[0];
+        const baseUrl =
+          "https://us-central1-test-url-api.cloudfunctions.net/api/";
+        res.status(200).send(`${baseUrl}${doc.id}`);
+      }
+    })
+    .catch((err) => {
+      res.status(500).send(`Internal Error: ${JSON.stringify(err)}`);
+    });
+});
+
+/**
+ * Scheduled function that runs the dynamic-image endpoint every 4 minutes to keep it warm.
+ */
+exports.scheduledScreenshotRequest = functions.pubsub
+  .schedule("every 4 minutes")
+  .onRun((context) => {
+    // Fetch an arbitrary share image (MA overview)
+    const imageUrl = "https://covidactnow.org/internal/share-image/states/ma";
+    const apiUrl =
+      "https://us-central1-test-url-api.cloudfunctions.net/api/dynamic-image/";
+    fetch(`${apiUrl}${imageUrl}`)
+      .then((response) => {
+        console.log("Scheduled screenshot request succeeded.");
+      })
+      .catch((error) => {
+        console.error("Scheduled screenshot request failed.", error);
+      });
+  });

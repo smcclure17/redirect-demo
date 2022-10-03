@@ -42,9 +42,6 @@ export async function takeScreenshot(
   console.log(`Going to URL, ${url}`);
   await tab.goto(url);
 
-  // TODO: If given a random URL, they're not guaranteed (probably won't) have
-  // the screenshot and screenshot-ready divs, meaning this will timeout everytime.
-  // Should we just use a flat timeout? Is there an elegant way to check if content has loaded?
   console.log('Waiting for "screenshot" div.');
   const element = await tab.waitForSelector(".screenshot", {
     timeout: TIMEOUT,
